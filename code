@@ -1,0 +1,407 @@
+
+#include <Adafruit_NeoPixel.h>
+
+// =====================================
+// 핀 설정
+// =====================================
+
+const int TRIG_PIN = 13;
+const int ECHO_PIN = 12;
+
+const int BUTTON_PIN = 2;
+const int NEOPIXEL_PIN = 5;
+const int BUZZER_PIN = 8;
+
+// =====================================
+// 네오픽셀 설정
+// =====================================
+
+#define LED_COUNT 16
+#define COUNTDOWN_LED_COUNT 12
+
+Adafruit_NeoPixel strip(
+  LED_COUNT,
+  NEOPIXEL_PIN,
+  NEO_GRB + NEO_KHZ800
+);
+
+// =====================================
+// 게임 상태 변수
+// =====================================
+
+bool isGameActive = false;
+bool goalScored = false;
+
+bool buttonReady = false;
+bool firstButtonRelease = false;
+
+unsigned long startTime = 0;
+unsigned long lastUltraReadTime = 0;
+
+const unsigned long GAME_TIME = 12000;
+const unsigned long ULTRA_INTERVAL = 20;
+
+int litCount = 0;
+
+// =====================================
+// 음계 주파수
+// =====================================
+
+#define NOTE_C4  262
+#define NOTE_E4  330
+#define NOTE_G4  392
+#define NOTE_C5  523
+#define NOTE_G5  784
+#define NOTE_A3  220
+#define NOTE_F3  175
+#define NOTE_CS3 139
+
+// =====================================
+// 함수 선언
+// =====================================
+
+void startGame();
+float readDistanceFast();
+void showRainbowEffect(int durationMs);
+void playStartSound();
+void playSuccessSound();
+void playFailSound();
+void updateCountdownLEDs();
+void showFailLEDs();
+
+// =====================================
+// 초기 설정
+// =====================================
+
+void setup() {
+
+  Serial.begin(9600);
+
+  pinMode(TRIG_PIN, OUTPUT);
+  pinMode(ECHO_PIN, INPUT);
+
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  pinMode(BUZZER_PIN, OUTPUT);
+
+  strip.begin();
+  strip.setBrightness(50);
+  strip.clear();
+  strip.show();
+
+  Serial.println("===============================");
+  Serial.println("농구 게임 전원 ON");
+  Serial.println("버튼을 놓아주세요.");
+  Serial.println("===============================");
+
+  // 전원 켠 직후 버튼이 눌려 있으면
+  // 버튼을 놓을 때까지 게임 시작 방지
+  while (digitalRead(BUTTON_PIN) == LOW) {
+    delay(10);
+  }
+
+  // 버튼이 놓인 상태 확인
+  firstButtonRelease = true;
+  buttonReady = true;
+
+  Serial.println("게임 준비 완료!");
+  Serial.println("버튼을 눌러 게임을 시작하세요.");
+}
+
+// =====================================
+// 메인 반복문
+// =====================================
+
+void loop() {
+
+  // =================================
+  // 버튼 입력 처리
+  // =================================
+
+  if (firstButtonRelease) {
+
+    if (digitalRead(BUTTON_PIN) == HIGH) {
+
+      buttonReady = true;
+
+    }
+    else if (!isGameActive && buttonReady) {
+
+      // 버튼을 한 번 누르면 재입력 방지
+      buttonReady = false;
+
+      startGame();
+    }
+  }
+
+  // =================================
+  // 게임 진행
+  // =================================
+
+  if (isGameActive) {
+
+    unsigned long currentMillis = millis();
+
+    unsigned long elapsedTime = currentMillis - startTime;
+
+    // 12초 제한시간 종료
+    if (elapsedTime >= GAME_TIME) {
+
+      isGameActive = false;
+
+      if (!goalScored) {
+
+        Serial.println("===============================");
+        Serial.println("시간 초과! GAME OVER!");
+        Serial.println("===============================");
+
+        // 빨간색 LED 먼저 점등
+        showFailLEDs();
+
+        // 실패음 재생
+        playFailSound();
+
+        Serial.println("실패!");
+        Serial.println("버튼을 눌러 다음 게임을 시작하세요.");
+      }
+
+      return;
+    }
+
+    // 1초마다 LED 하나씩 점등
+    updateCountdownLEDs();
+
+    // 초음파 센서 측정
+    if (currentMillis - lastUltraReadTime >= ULTRA_INTERVAL) {
+
+      lastUltraReadTime = currentMillis;
+
+      float distance = readDistanceFast();
+
+      Serial.print("측정 거리: ");
+
+      if (distance >= 999.0) {
+
+        Serial.println("측정 범위 초과");
+
+      }
+      else {
+
+        Serial.print(distance, 1);
+        Serial.println(" cm");
+      }
+
+      // 5cm 이하 감지 시 골 성공
+      if (distance > 0 && distance <= 5.0) {
+
+        goalScored = true;
+        isGameActive = false;
+
+        Serial.println("===============================");
+        Serial.println("★ 골 성공! ★");
+        Serial.println("===============================");
+
+        // 성공음
+        playSuccessSound();
+
+        // 무지개 LED 효과
+        showRainbowEffect(2500);
+
+        Serial.println("성공!");
+        Serial.println("버튼을 눌러 다음 게임을 시작하세요.");
+      }
+    }
+  }
+}
+
+// =====================================
+// 게임 시작 함수
+// =====================================
+
+void startGame() {
+
+  goalScored = false;
+  litCount = 0;
+
+  // 모든 LED 초기화
+  strip.clear();
+  strip.show();
+
+  Serial.println("===============================");
+  Serial.println("농구 게임 시작!");
+  Serial.println("제한시간: 12초");
+  Serial.println("===============================");
+
+  // 시작음 재생
+  playStartSound();
+
+  // 시작음 종료 후 타이머 시작
+  startTime = millis();
+  lastUltraReadTime = startTime;
+
+  isGameActive = true;
+
+  // 첫 번째 LED 즉시 점등
+  updateCountdownLEDs();
+}
+
+// =====================================
+// 카운트다운 LED
+// =====================================
+
+void updateCountdownLEDs() {
+
+  unsigned long elapsedTime = millis() - startTime;
+
+  int targetCount = (elapsedTime / 1000) + 1;
+
+  if (targetCount > COUNTDOWN_LED_COUNT) {
+    targetCount = COUNTDOWN_LED_COUNT;
+  }
+
+  while (litCount < targetCount) {
+
+    strip.setPixelColor(
+      litCount,
+      strip.Color(0, 255, 0)
+    );
+
+    litCount++;
+
+    strip.show();
+
+    Serial.print("LED 점등: ");
+    Serial.print(litCount);
+    Serial.println(" / 12");
+  }
+}
+
+// =====================================
+// 실패 LED
+// =====================================
+
+void showFailLEDs() {
+
+  strip.clear();
+
+  // 12개 LED 빨간색 점등
+  for (int i = 0; i < COUNTDOWN_LED_COUNT; i++) {
+
+    strip.setPixelColor(
+      i,
+      strip.Color(255, 0, 0)
+    );
+  }
+
+  strip.show();
+}
+
+// =====================================
+// 초음파 거리 측정
+// =====================================
+
+float readDistanceFast() {
+
+  digitalWrite(TRIG_PIN, LOW);
+  delayMicroseconds(2);
+
+  digitalWrite(TRIG_PIN, HIGH);
+  delayMicroseconds(10);
+
+  digitalWrite(TRIG_PIN, LOW);
+
+  long duration = pulseIn(ECHO_PIN, HIGH, 10000);
+
+  if (duration == 0) {
+    return 999.0;
+  }
+
+  return duration * 0.034 / 2.0;
+}
+
+// =====================================
+// 성공 무지개 LED 효과
+// =====================================
+
+void showRainbowEffect(int durationMs) {
+
+  unsigned long startRainbow = millis();
+
+  long firstPixelHue = 0;
+
+  while (millis() - startRainbow < durationMs) {
+
+    for (int i = 0; i < strip.numPixels(); i++) {
+
+      int pixelHue = firstPixelHue +
+        (i * 65536L / strip.numPixels());
+
+      strip.setPixelColor(
+        i,
+        strip.gamma32(strip.ColorHSV(pixelHue))
+      );
+    }
+
+    strip.show();
+
+    firstPixelHue += 512;
+
+    delay(10);
+  }
+}
+
+// =====================================
+// 게임 시작음
+// =====================================
+
+void playStartSound() {
+
+  tone(BUZZER_PIN, NOTE_C4, 80);
+  delay(100);
+
+  tone(BUZZER_PIN, NOTE_E4, 80);
+  delay(100);
+
+  tone(BUZZER_PIN, NOTE_G4, 120);
+  delay(140);
+
+  noTone(BUZZER_PIN);
+}
+
+// =====================================
+// 골 성공음
+// =====================================
+
+void playSuccessSound() {
+
+  tone(BUZZER_PIN, NOTE_G4, 100);
+  delay(120);
+
+  tone(BUZZER_PIN, NOTE_C5, 100);
+  delay(120);
+
+  tone(BUZZER_PIN, NOTE_E4, 100);
+  delay(120);
+
+  tone(BUZZER_PIN, NOTE_G5, 250);
+  delay(300);
+
+  noTone(BUZZER_PIN);
+}
+
+// =====================================
+// 게임 실패음
+// =====================================
+
+void playFailSound() {
+
+  tone(BUZZER_PIN, NOTE_A3, 150);
+  delay(180);
+
+  tone(BUZZER_PIN, NOTE_F3, 150);
+  delay(180);
+
+  tone(BUZZER_PIN, NOTE_CS3, 300);
+  delay(350);
+
+  noTone(BUZZER_PIN);
+}
